@@ -28,6 +28,7 @@ import (
 	"github.com/decred/dcrd/chaincfg/chainhash"
 	"github.com/decred/dcrd/dcrec/secp256k1"
 	"github.com/decred/dcrd/dcrutil"
+	"github.com/decred/dcrd/blockchain/stake"
 	"github.com/decred/dcrd/wire"
 	pb "github.com/decred/dcrwallet/rpc/walletrpc"
 	"github.com/decred/politeia/politeiad/api/v1/identity"
@@ -721,6 +722,38 @@ func (c *ctx) _vote(seed int64, token, voteId string) ([]string, *v1.BallotReply
 		if err != nil {
 			return nil, nil, err
 		}
+
+		// Filter out tickets tracked by imported xpub accounts.
+		r, err := c.wallet.GetTransaction(context.TODO(), &pb.GetTransactionRequest{
+			TransactionHash: h[:],
+		})
+		if err != nil {
+			log.Error(err)
+			continue
+		}
+		tx := new(wire.MsgTx)
+		err = tx.Deserialize(bytes.NewReader(r.Transaction.Transaction))
+		if err != nil {
+			log.Error(err)
+			continue
+		}
+		addr, err := stake.AddrFromSStxPkScrCommitment(tx.TxOut[1].PkScript, activeNetParams.Params)
+		if err != nil {
+			log.Error(err)
+			continue
+		}
+		vr, err := c.wallet.ValidateAddress(context.TODO(), &pb.ValidateAddressRequest{
+			Address: addr.String(),
+		})
+		if err != nil {
+			log.Error(err)
+			continue
+		}
+		if vr.AccountNumber >= 1<<31-1 { // imported xpub account
+			// do not append to filtered.
+			continue
+		}
+
 		v, ok := castVotes[h.String()]
 		if !ok || !verifyV1Vote(t.Address, &v) {
 			filtered = append(filtered, t)
